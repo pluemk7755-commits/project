@@ -1,0 +1,22 @@
+# PRIVATE-REPOSITORY EDITION — never change visibility to Public while real data is stored.
+# Never publish email sender credentials or app password.
+/data/smtp.env
+.env
+.env.*
+**/smtp.env
+# Unnecessary local files
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.log
+.pytest_cache/
+*_backup*
+*.bak
+
+**/.env
+**/.env.*
+*.pem
+*.key
+credentials.json
+service_account.json
