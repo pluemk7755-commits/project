@@ -111,9 +111,9 @@ def _sync_exact_cues(c):
             seen.add(key)
             price,photo=desired[key]
             if marker:
-                c.execute('UPDATE cues SET img=?,status="AVAILABLE" WHERE cue_id=?',(photo,cue_id))
+                c.execute('UPDATE cues SET img=? WHERE cue_id=?',(photo,cue_id))
             else:
-                c.execute('UPDATE cues SET price_sat=?,img=?,status="AVAILABLE" WHERE cue_id=?',(price,photo,cue_id))
+                c.execute('UPDATE cues SET price_sat=?,img=? WHERE cue_id=?',(price,photo,cue_id))
             continue
         # A duplicate, obsolete model or unknown legacy item must not be bookable.
         # Keep a historical row only when an existing booking references it.
@@ -395,20 +395,103 @@ def check_out(staff_id,bid):
         if not b or b['status']!='CHECKED_IN':raise RuleError('รายการนี้ไม่ได้อยู่ระหว่างใช้โต๊ะ')
         c.execute("UPDATE bookings SET status='COMPLETED' WHERE booking_id=?",(bid,))
 
+
 def sweep():
     """Update expired holds and settled, non-checked-in bookings; idempotent."""
     with connect(True) as c:
-        expired=c.execute("SELECT booking_id,user_id,credit_sat FROM bookings WHERE status='PENDING_SLIP' AND hold_expires_at<=?",(moment(),)).fetchall()
+        expired = c.execute(
+            """
+            SELECT booking_id, user_id, credit_sat, redeemed_points
+            FROM bookings
+            WHERE status='PENDING_SLIP'
+              AND hold_expires_at<=?
+            """,
+            (moment(),)
+        ).fetchall()
+
         for b in expired:
-            c.execute("UPDATE bookings SET status='CANCELLED' WHERE booking_id=?",(b['booking_id'],))
+            updated = c.execute(
+                """
+                UPDATE bookings SET status='CANCELLED'
+                WHERE booking_id=? AND status='PENDING_SLIP'
+                """,
+                (b['booking_id'],)
+            )
+
+            if updated.rowcount != 1:
+                continue
+
             if b['credit_sat']:
-                c.execute("INSERT OR IGNORE INTO credit_ledger(user_id,booking_id,kind,delta_sat) VALUES(?,?,'RETURN',?)",(b['user_id'],b['booking_id'],b['credit_sat']))
-            points=c.execute('SELECT redeemed_points FROM bookings WHERE booking_id=?',(b['booking_id'],)).fetchone()[0]
-            if points:c.execute("INSERT OR IGNORE INTO points_wallet_ledger(user_id,booking_id,kind,delta_points) VALUES(?,?,'RETURN',?)",(b['user_id'],b['booking_id'],points))
-        due=c.execute("SELECT booking_id,user_id,total_sat FROM bookings WHERE status='CONFIRMED' AND datetime(start_at,'+15 minutes')<?",(moment(),)).fetchall()
+                c.execute(
+                    """
+                    INSERT OR IGNORE INTO credit_ledger
+                    (user_id, booking_id, kind, delta_sat)
+                    VALUES (?, ?, 'RETURN', ?)
+                    """,
+                    (b['user_id'], b['booking_id'], b['credit_sat'])
+                )
+
+            if b['redeemed_points']:
+                c.execute(
+                    """
+                    INSERT OR IGNORE INTO points_wallet_ledger
+                    (user_id, booking_id, kind, delta_points)
+                    VALUES (?, ?, 'RETURN', ?)
+                    """,
+                    (b['user_id'], b['booking_id'], b['redeemed_points'])
+                )
+
+        due = c.execute(
+            """
+            SELECT booking_id, user_id, total_sat, redeemed_points
+            FROM bookings
+            WHERE status='CONFIRMED'
+              AND datetime(start_at, '+15 minutes') < ?
+            """,
+            (moment(),)
+        ).fetchall()
+
         for b in due:
-            c.execute("UPDATE bookings SET status='NO_SHOW' WHERE booking_id=? AND status='CONFIRMED'",(b['booking_id'],))
-            c.execute("INSERT OR IGNORE INTO credit_ledger(user_id,booking_id,kind,delta_sat) VALUES(?,?,'NO_SHOW',?)",(b['user_id'],b['booking_id'],b['total_sat']))
+            updated = c.execute(
+                """
+                UPDATE bookings
+                SET status='NO_SHOW'
+                WHERE booking_id=? AND status='CONFIRMED'
+                """,
+                (b['booking_id'],)
+            )
+
+            if updated.rowcount != 1:
+                continue
+
+            c.execute(
+                """
+                INSERT OR IGNORE INTO credit_ledger
+                (user_id, booking_id, kind, delta_sat)
+                VALUES (?, ?, 'NO_SHOW', ?)
+                """,
+                (b['user_id'], b['booking_id'], b['total_sat'])
+            )
+
+            if b['redeemed_points']:
+                c.execute(
+                    """
+                    INSERT OR IGNORE INTO points_wallet_ledger
+                    (user_id, booking_id, kind, delta_points)
+                    VALUES (?, ?, 'RETURN', ?)
+                    """,
+                    (b['user_id'], b['booking_id'], b['redeemed_points'])
+                )
+
+            c.execute(
+                """
+                UPDATE points_ledger
+                SET points=0
+                WHERE booking_id=?
+                """,
+                (b['booking_id'],)
+            )
+
 
 def request_reset(email,send=None):
     """Do not expose whether a customer exists. Never return code in response."""
