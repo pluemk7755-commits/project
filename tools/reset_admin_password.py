@@ -11,7 +11,7 @@ import sqlite3
 import sys
 from datetime import datetime
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from webapp import core
 
