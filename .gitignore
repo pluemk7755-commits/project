@@ -20,3 +20,13 @@ venv/
 *.key
 credentials.json
 service_account.json
+# Customer payment slips uploaded during runtime
+/data/uploads/*
+!/data/uploads/.gitkeep
+
+# Local database backups
+/data/backups/
+
+# SQLite temporary files
+/data/*.sqlite3-wal
+/data/*.sqlite3-shm
