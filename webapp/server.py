@@ -193,8 +193,9 @@ class AppHandler(BaseHTTPRequestHandler):
         if not self.session['user_id']:raise db.RuleError('กรุณาเข้าสู่ระบบสมาชิกก่อน')
         return self.session['user_id']
     def staff_required(self,admin=False):
-        if not self.session['staff_id']:raise db.RuleError('กรุณาเข้าสู่ระบบพนักงาน')
-        if admin and self.session['role']!='ADMIN':raise db.RuleError('เฉพาะ ADMIN เท่านั้น')
+        # Keep the optional argument for existing route compatibility. STAFF
+        # and ADMIN are now one unified administrator role with equal access.
+        if not self.session['staff_id']:raise db.RuleError('กรุณาเข้าสู่ระบบผู้ดูแลระบบ')
         return self.session['staff_id']
     def do_GET(self):
         try:
@@ -210,7 +211,7 @@ class AppHandler(BaseHTTPRequestHandler):
             if path=='/cues':return self.cues()
             if path=='/register':return self.register_page()
             if path=='/login':return self.login_page()
-            if path=='/staff/login':return self.login_page(staff=True)
+            if path=='/staff/login':return self.login_page(staff=True,args=args)
             if path=='/forgot':return self.forgot_page()
             if path=='/reset':return self.reset_page()
             if path=='/verify':return self.verify_page(args)
@@ -249,9 +250,12 @@ class AppHandler(BaseHTTPRequestHandler):
             if not handler:return self.page(alert('ไม่พบคำสั่งที่ร้องขอ','error'),code=404)
             handler(fields,files)
         except db.RuleError as err:
-            # Staff action errors stay on the staff interface; never redirect to a customer login.
+            # Failed administrator sign-in returns to the administrator login form,
+            # preserving the error message and allowing another attempt.
             route=urlparse(self.path).path
-            if route=='/admin/create-admin':
+            if route=='/staff/login':
+                self.go('/staff/login?error=1')
+            elif route=='/admin/create-admin':
                 self.go('/admin/admins?error='+quote(str(err)))
             elif route in ('/admin/checkin','/admin/checkout','/admin/table-update','/admin/review','/admin/cancel-booking'):
                 view='booking' if route in ('/admin/checkin','/admin/checkout','/admin/cancel-booking') else 'tables' if route=='/admin/table-update' else 'payments'
@@ -344,9 +348,14 @@ class AppHandler(BaseHTTPRequestHandler):
         self.page('<div class="page-head compact"><h1>ไม้คิวพรีเมียม</h1><p>เลือกไม้คิวที่เหมาะกับคุณ กดดูรายละเอียดเพื่ออ่านจุดเด่นของแต่ละรุ่น</p></div><div class="cue-grid cue-catalog-grid cue-clean-grid">'+''.join(cards)+'</div>','ไม้คิวพรีเมียม','cues')
     def register_page(self):
         self.page(f'''<section class="auth-layout"><div class="auth-visual"><span>JOIN THE CLUB</span><h2>เริ่มต้นประสบการณ์<br>ที่ใช่สำหรับคุณ</h2></div><form class="auth-card" method="post" action="/register">{self.csrf()}<span class="eyebrow">CREATE ACCOUNT</span><h1>สมัครสมาชิก</h1><label>ชื่อ-นามสกุล<input name="name" required minlength="2"></label><label>อีเมล<input type="email" name="email" required></label><label>เบอร์โทร<input name="phone" required></label><label>รหัสผ่าน (6–60 ตัวอักษร)<input type="password" name="password" minlength="6" maxlength="60" required></label><button class="pill primary block">สมัครสมาชิก</button><p>มีบัญชีแล้ว? <a href="/login">เข้าสู่ระบบ</a></p></form></section>''','สมัครสมาชิก')
-    def login_page(self,staff=False):
+    def login_page(self,staff=False,args=None):
         action='/staff/login' if staff else '/login';heading='เข้าสู่ระบบผู้ดูแล' if staff else 'เข้าสู่ระบบสมาชิก'
-        self.page(f'''<section class="auth-layout"><div class="auth-visual"><span>WELCOME BACK</span><h2>กลับมาสนุกกันต่อ<br>ที่ Roo Nai Gor Dai</h2></div><form class="auth-card" method="post" action="{action}">{self.csrf()}<span class="eyebrow">SECURE LOGIN</span><h1>{heading}</h1>{'<p class="hint">ใช้บัญชีผู้ดูแลร้าน ไม่ใช่บัญชีสมาชิกทั่วไป</p>' if staff else ''}<label>{"ชื่อผู้ใช้ ADMIN" if staff else "อีเมล / เบอร์โทร / ชื่อ-นามสกุล"}<input name="identifier" required autocomplete="username"></label><label>รหัสผ่าน<input type="password" name="password" required autocomplete="current-password"></label><button class="pill primary block">เข้าสู่ระบบ</button>{'' if staff else '<p><a href="/forgot">ลืมรหัสผ่าน?</a></p>'}<p><a href="/">กลับหน้าหลัก</a></p></form></section>''','เข้าสู่ระบบ')
+        args=args or {}
+        # Keep failed administrator sign-in feedback simple and show the same
+        # login form again so the user can correct the credentials immediately.
+        error_message='เข้าสู่ระบบไม่สำเร็จ' if staff and args.get('error') else ''
+        error_block=alert(error_message,'error') if error_message else ''
+        self.page(f'''<section class="auth-layout"><div class="auth-visual"><span>WELCOME BACK</span><h2>กลับมาสนุกกันต่อ<br>ที่ Roo Nai Gor Dai</h2></div><form class="auth-card" method="post" action="{action}">{self.csrf()}<span class="eyebrow">SECURE LOGIN</span><h1>{heading}</h1>{error_block}{'<p class="hint">ใช้บัญชีผู้ดูแลร้าน ไม่ใช่บัญชีสมาชิกทั่วไป</p>' if staff else ''}<label>{"ชื่อผู้ใช้ ADMIN" if staff else "อีเมล / เบอร์โทร / ชื่อ-นามสกุล"}<input name="identifier" required autocomplete="username"></label><label>รหัสผ่าน<input type="password" name="password" required autocomplete="current-password"></label><button class="pill primary block">เข้าสู่ระบบ</button>{'' if staff else '<p><a href="/forgot">ลืมรหัสผ่าน?</a></p>'}<p><a href="/">กลับหน้าหลัก</a></p></form></section>''','เข้าสู่ระบบ')
     def forgot_page(self):
         captcha=''
         if db.use_central_otp():
@@ -663,7 +672,7 @@ class AppHandler(BaseHTTPRequestHandler):
     def admin_admins(self,args):
         self.staff_required(admin=True)
         with db.connect() as c:
-            admins=c.execute("SELECT staff_id,username,is_active FROM staff_users WHERE role='ADMIN' ORDER BY staff_id").fetchall()
+            admins=c.execute("SELECT staff_id,username,is_active FROM staff_users ORDER BY staff_id").fetchall()
         rows=''.join(f'<tr><td>#{r["staff_id"]}</td><td>{E(r["username"])}</td><td>{"ใช้งาน" if r["is_active"] else "ปิดใช้งาน"}</td></tr>' for r in admins)
         msg=alert(args['error'][:200],'error') if args.get('error') else (alert('สร้างบัญชี ADMIN สำเร็จ','success') if args.get('created')=='1' else '')
         body=(self.admin_header('admins')+msg+'<h2>จัดการบัญชี ADMIN</h2><p>เฉพาะ ADMIN ที่เข้าสู่ระบบแล้วเท่านั้นที่สร้างบัญชีผู้ดูแลใหม่ได้</p>'

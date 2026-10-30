@@ -86,6 +86,10 @@ def init_db():
         existing={row['name'] for row in c.execute('PRAGMA table_info(bookings)')}
         for name,kind in (('redeemed_points','INTEGER NOT NULL DEFAULT 0'),('points_discount_sat','INTEGER NOT NULL DEFAULT 0')):
             if name not in existing:c.execute('ALTER TABLE bookings ADD COLUMN '+name+' '+kind)
+        # Unify legacy STAFF accounts with ADMIN. This only changes the role
+        # label; account IDs, usernames, password hashes, active flags, sessions,
+        # bookings and audit history remain untouched. Safe to run repeatedly.
+        c.execute("UPDATE staff_users SET role='ADMIN' WHERE role='STAFF'")
     with connect(True) as c:
         table_rows=[(f'Snooker {i:02}','SNOOKER',12000) for i in range(1,7)] + [('Snooker VIP 01','VIP',15000)] + [(f'Pool {i:02}','POOL',10000) for i in range(1,3)]
         c.executemany('INSERT OR IGNORE INTO club_tables(table_code,table_type,hourly_rate_sat) VALUES(?,?,?)',table_rows)
@@ -322,9 +326,9 @@ def admin_cancel_booking(admin_id,bid):
     status, refund, points and audit either all commit or all roll back.
     """
     with connect(True) as c:
-        staff=c.execute('SELECT role,is_active FROM staff_users WHERE staff_id=?',(admin_id,)).fetchone()
-        if not staff or not staff['is_active'] or staff['role']!='ADMIN':
-            raise RuleError('เฉพาะ ADMIN เท่านั้นที่ยกเลิกรายการและคืนเครดิตได้')
+        staff=c.execute('SELECT is_active FROM staff_users WHERE staff_id=?',(admin_id,)).fetchone()
+        if not staff or not staff['is_active']:
+            raise RuleError('บัญชีผู้ดูแลไม่พร้อมใช้งาน')
         b=c.execute('SELECT * FROM bookings WHERE booking_id=?',(bid,)).fetchone()
         if not b:raise RuleError('ไม่พบรายการจอง')
         if b['status'] not in ('PENDING_SLIP','UNDER_REVIEW','REJECTED','CONFIRMED'):
@@ -363,8 +367,8 @@ def add_slip(uid,bid,filename,amount):
 
 def review_slip(admin_id,slip_id,approve,note=''):
     with connect(True) as c:
-        staff=c.execute('SELECT * FROM staff_users WHERE staff_id=? AND is_active=1',(admin_id,)).fetchone()
-        if not staff or staff['role']!='ADMIN':raise RuleError('เฉพาะ ADMIN เท่านั้นที่ตรวจสลิปได้')
+        staff=c.execute('SELECT staff_id FROM staff_users WHERE staff_id=? AND is_active=1',(admin_id,)).fetchone()
+        if not staff:raise RuleError('บัญชีผู้ดูแลไม่พร้อมใช้งาน')
         slip=c.execute('SELECT * FROM payment_slips WHERE slip_id=?',(slip_id,)).fetchone()
         if not slip or slip['status']!='PENDING':raise RuleError('สลิปนี้ถูกตรวจสอบแล้ว')
         b=c.execute('SELECT * FROM bookings WHERE booking_id=?',(slip['booking_id'],)).fetchone()
@@ -630,8 +634,8 @@ def finish_verified_reset(session_token,password,confirmation):
 
 def delete_user(admin_id,user_id):
     with connect(True) as c:
-        staff=c.execute('SELECT role FROM staff_users WHERE staff_id=? AND is_active=1',(admin_id,)).fetchone()
-        if not staff or staff['role']!='ADMIN':raise RuleError('ไม่มีสิทธิ์ลบผู้ใช้')
+        staff=c.execute('SELECT staff_id FROM staff_users WHERE staff_id=? AND is_active=1',(admin_id,)).fetchone()
+        if not staff:raise RuleError('บัญชีผู้ดูแลไม่พร้อมใช้งาน')
         if not c.execute('SELECT 1 FROM users WHERE user_id=?',(user_id,)).fetchone():raise RuleError('ไม่พบผู้ใช้')
         # Deletion without financial records can be physical; otherwise scrub PII
         # and keep a non-login bookkeeping placeholder for referential integrity.
@@ -654,16 +658,16 @@ def money(sat):return f'฿{sat/100:,.2f}'
 
 
 def create_admin(actor_id, username, password, confirmation):
-    """Create a new ADMIN using the existing staff table, with role authorization."""
+    """Create a new ADMIN using the existing staff table; all active staff have equal authority."""
     username=username.strip()
     if not (3 <= len(username) <= 60) or not re.fullmatch(r'[A-Za-z0-9_.-]+',username):
         raise RuleError('ชื่อผู้ใช้ต้องยาว 3–60 ตัว และใช้ได้เฉพาะตัวอักษรอังกฤษ ตัวเลข _ . -')
     if not password_ok(password):raise RuleError('รหัสผ่านต้องยาว 6–60 ตัวอักษร')
     if password!=confirmation:raise RuleError('รหัสผ่านทั้งสองช่องไม่ตรงกัน')
     with connect(True) as c:
-        actor=c.execute('SELECT role,is_active FROM staff_users WHERE staff_id=?',(actor_id,)).fetchone()
-        if not actor or actor['role']!='ADMIN' or not actor['is_active']:
-            raise RuleError('เฉพาะ ADMIN ที่ใช้งานอยู่เท่านั้นที่เพิ่มบัญชีได้')
+        actor=c.execute('SELECT is_active FROM staff_users WHERE staff_id=?',(actor_id,)).fetchone()
+        if not actor or not actor['is_active']:
+            raise RuleError('บัญชีผู้ดูแลไม่พร้อมใช้งาน')
         if c.execute('SELECT 1 FROM staff_users WHERE lower(username)=lower(?)',(username,)).fetchone():
             raise RuleError('ชื่อผู้ใช้นี้มีอยู่แล้ว')
         try:

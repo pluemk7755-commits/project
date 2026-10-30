@@ -1,9 +1,11 @@
-# PRIVATE-REPOSITORY EDITION — never change visibility to Public while real data is stored.
-# Never publish email sender credentials or app password.
+# PRIVATE REPOSITORY: contains the original payment QR and real payee account details.
+# Do not publish this repository while these payment details and test credentials are included.
+# Never publish email sender credentials or app passwords.
 /data/smtp.env
 .env
 .env.*
 **/smtp.env
+
 # Unnecessary local files
 __pycache__/
 *.py[cod]

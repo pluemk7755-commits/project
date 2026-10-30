@@ -70,6 +70,12 @@ class BrowserHttpTests(unittest.TestCase):
   with self.assertRaises(urllib.error.HTTPError) as err:
    self.httpget('/static/images/not-exist.png')
   self.assertEqual(err.exception.code,404)
+ def test_01e_forgot_page_renders_turnstile_for_central_otp(self):
+  self.open_browser();html=self.httpget('/forgot')
+  self.assertIn('data-otp-turnstile',html)
+  self.assertIn('data-otp-forgot-form',html)
+  self.assertIn('name="cf-turnstile-response"',html)
+  self.assertIn('0x4AAAAAAFqixMTMFSq4YmK2',html)
  def test_02_register_login_booking_and_receipt(self):
   self.open_browser();self.extract(self.httpget('/register'))
   self.post('/register',{'name':'ลูกค้าทดสอบเว็บ','email':'webuser@example.org','phone':'0855559999','password':'abcdef'}).read()
@@ -121,6 +127,23 @@ class BrowserHttpTests(unittest.TestCase):
   self.post('/staff/login',{'identifier':'admin_test','password':'pass123'}).read()
   self.assertIn('ศูนย์จัดการร้าน',self.httpget('/admin'))
   self.assertIn('จัดการสมาชิก',self.httpget('/admin/users'))
+ def test_05b_failed_admin_login_shows_message_and_allows_retry(self):
+  self.open_browser();self.extract(self.httpget('/staff/login'))
+  response=self.post('/staff/login',{'identifier':'not_an_admin','password':'wrongpass'})
+  html=response.read().decode('utf-8')
+  self.assertEqual(urllib.parse.urlparse(response.geturl()).path,'/staff/login')
+  self.assertIn('เข้าสู่ระบบผู้ดูแล',html)
+  self.assertIn('เข้าสู่ระบบไม่สำเร็จ',html)
+  self.assertNotIn('กลับไปหน้าเข้าสู่ระบบ ADMIN',html)
+  self.assertIn('action="/staff/login"',html)
+  self.assertIn('name="identifier"',html)
+  self.assertIn('name="password"',html)
+  # The same browser session can correct the credentials and sign in normally.
+  self.extract(html)
+  retry=self.post('/staff/login',{'identifier':'admin_test','password':'pass123'})
+  retry_html=retry.read().decode('utf-8')
+  self.assertEqual(urllib.parse.urlparse(retry.geturl()).path,'/admin')
+  self.assertIn('ศูนย์จัดการร้าน',retry_html)
  def test_06_admin_filter_pages_render_and_keep_selection(self):
   self.open_browser();self.extract(self.httpget('/staff/login'))
   self.post('/staff/login',{'identifier':'admin_test','password':'pass123'}).read()
